@@ -1,130 +1,122 @@
 import requests
-import itertools
-import sqlite3
-from datetime import datetime, timedelta
+import json
 
-from config import *
-from airports import EU_AIRPORTS
+TELEGRAM_TOKEN = "SEU_TOKEN"
+CHAT_ID = "SEU_CHAT_ID"
+
+MAX_PRICE = 3200
+MAX_RESULTS = 3
+
+origem = "GRU"
+
+destinos_ida = [
+    "MAD",  # Madrid
+    "MXP",  # Milão
+    "BCN",  # Barcelona
+    "LIS"   # Lisboa
+]
+
+destinos_volta = [
+    "FCO",  # Roma
+    "NAP",  # Napoli
+    "PMO",  # Palermo
+    "CTA"   # Catania
+]
 
 
-def gerar_datas(inicio, fim):
-
-    start = datetime.fromisoformat(inicio)
-    end = datetime.fromisoformat(fim)
-
-    datas = []
-
-    while start <= end:
-        datas.append(start.strftime("%Y-%m-%d"))
-        start += timedelta(days=1)
-
-    return datas
+def gerar_link(origem, destino, ida, volta):
+    return f"https://www.skyscanner.com/transport/flights/{origem}/{destino}/{ida}/{volta}"
 
 
 def enviar_telegram(msg):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    requests.post(url, data={
+    payload = {
         "chat_id": CHAT_ID,
         "text": msg
+    }
+
+    requests.post(url, data=payload)
+
+
+def buscar_voos():
+
+    voos = []
+
+    # EXEMPLO (simulado)
+    voos.append({
+        "origem": "GRU",
+        "destino": "MAD",
+        "preco": 2450,
+        "ida": "22-08",
+        "volta": "28-10",
+        "conexoes": 1
     })
 
+    voos.append({
+        "origem": "GRU",
+        "destino": "MXP",
+        "preco": 2890,
+        "ida": "25-08",
+        "volta": "30-10",
+        "conexoes": 1
+    })
 
-def salvar_alerta(rota):
-
-    conn = sqlite3.connect("deals.db")
-    c = conn.cursor()
-
-    c.execute("CREATE TABLE IF NOT EXISTS deals(rota TEXT)")
-    c.execute("INSERT INTO deals VALUES(?)", (rota,))
-
-    conn.commit()
-    conn.close()
-
-
-def alerta_existe(rota):
-
-    conn = sqlite3.connect("deals.db")
-    c = conn.cursor()
-
-    c.execute("CREATE TABLE IF NOT EXISTS deals(rota TEXT)")
-    c.execute("SELECT * FROM deals WHERE rota=?", (rota,))
-
-    r = c.fetchone()
-
-    conn.close()
-
-    return r
+    return voos
 
 
-def buscar_voo(origem, destino, ida, volta):
+def filtrar_voos(voos):
 
-    # Simulação de preço (depois podemos conectar APIs reais)
-    preco = 2000 + hash(origem + destino + ida) % 2000
+    voos_filtrados = []
 
-    conexoes = 1
+    for voo in voos:
 
-    return {
-        "origem": origem,
-        "destino": destino,
-        "ida": ida,
-        "volta": volta,
-        "preco": preco,
-        "conexoes": conexoes
-    }
+        if voo["preco"] > MAX_PRICE:
+            continue
+
+        if voo["conexoes"] > 1:
+            continue
+
+        voos_filtrados.append(voo)
+
+    voos_filtrados.sort(key=lambda x: x["preco"])
+
+    return voos_filtrados[:MAX_RESULTS]
 
 
 def main():
 
-    idas = gerar_datas(DEPARTURE_START, DEPARTURE_END)
-    voltas = gerar_datas(RETURN_START, RETURN_END)
+    voos = buscar_voos()
 
-    combos = list(itertools.product(idas, voltas, EU_AIRPORTS))
+    voos_filtrados = filtrar_voos(voos)
 
-    voos = []
+    for voo in voos_filtrados:
 
-    for ida, volta, destino in combos[:800]:
+        link = gerar_link(
+            voo["origem"],
+            voo["destino"],
+            voo["ida"],
+            voo["volta"]
+        )
 
-        voo = buscar_voo(ORIGIN, destino, ida, volta)
+        mensagem = f"""
+✈️ Promoção encontrada
 
-        if voo["conexoes"] <= MAX_STOPS:
-            voos.append(voo)
+{voo['origem']} → {voo['destino']}
 
-    # remover duplicados
-    vistos = set()
-    filtrados = []
+💰 R$ {voo['preco']}
 
-    for v in voos:
+📅 Ida: {voo['ida']}
+📅 Volta: {voo['volta']}
 
-        chave = (v["origem"], v["destino"], v["ida"], v["volta"])
+🔌 {voo['conexoes']} conexão
 
-        if chave not in vistos:
-            vistos.add(chave)
-            filtrados.append(v)
-
-    for v in filtrados:
-
-        if v["preco"] < MAX_PRICE_ALERT:
-
-            rota = f"{v['origem']}-{v['destino']}-{v['ida']}-{v['volta']}"
-
-            if not alerta_existe(rota):
-
-                msg = f"""
-🔥 PASSAGEM BARATA
-
-{v['origem']} → {v['destino']}
-
-💰 R${v['preco']}
-
-🛫 {v['ida']}
-🛬 {v['volta']}
+🔗 Comprar:
+{link}
 """
 
-                enviar_telegram(msg)
-
-                salvar_alerta(rota)
+        enviar_telegram(mensagem)
 
 
 if __name__ == "__main__":
